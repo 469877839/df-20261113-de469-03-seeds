@@ -1,0 +1,91 @@
+"""Test SimCore."""
+
+import pytest
+
+from pymodbus.exceptions import NoSuchIdException
+from pymodbus.simulator import DataType, SimData, SimDevice
+from pymodbus.simulator.simcore import SimCore
+
+
+class TestSimCore:
+    """Test simulator core component."""
+
+    simdata1 = SimData(0, datatype=DataType.INT16, values=15)
+    simdata2 = SimData(1, datatype=DataType.INT16, values=16)
+    simdata3 = SimData(1, datatype=DataType.BITS, values=16)
+
+    @pytest.mark.parametrize(
+        "devices",
+        [
+            SimDevice(0, simdata=simdata3),
+            [SimDevice(0, simdata=simdata3)],
+            [SimDevice(0, simdata=simdata3), SimDevice(1, simdata=simdata3)],
+            SimDevice(0, simdata=([simdata3], [simdata3], [simdata1], [simdata3])),
+        ],
+    )
+    def test_simcore_instanciate(self, devices):
+        """Test that l can be objects."""
+        SimCore(devices=devices)
+
+    @pytest.mark.parametrize(
+        "devices",
+        [
+            "not ok",
+            ["not ok"],
+            [SimDevice(1, simdata=simdata3), SimDevice(1, simdata=simdata3)],
+        ],
+    )
+    def test_simdcore_not_ok(self, devices):
+        """Test that simdata can be objects."""
+        with pytest.raises(TypeError):
+            SimCore(devices=devices)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"device_id": 4, "func_code": 3, "address": 0, "count": 1},
+        ],
+    )
+    async def test_simcore_get(self, kwargs):
+        """Test that simdata can be objects."""
+        core = SimCore(devices=SimDevice(0, simdata=self.simdata2))
+        await core.async_getValues(**kwargs)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"device_id": 4, "func_code": 3, "address": 0, "values": [1]},
+        ],
+    )
+    async def test_simcore_set(self, kwargs):
+        """Test that simdata can be objects."""
+        core = SimCore(devices=SimDevice(0, simdata=self.simdata2))
+        await core.async_setValues(**kwargs)
+
+    def test_simcore_device_ids(self):
+        """Test that simdata can be objects."""
+        core = SimCore(devices=SimDevice(1, simdata=self.simdata2))
+        assert core.device_ids() == [1]
+
+    async def test_simcore_get_missing_device(self):
+        """Test unknown device id without device 0 raises NoSuchIdException."""
+        core = SimCore(devices=SimDevice(1, simdata=self.simdata2))
+        with pytest.raises(NoSuchIdException):
+            await core.async_getValues(device_id=4, func_code=3, address=1)
+
+    async def test_simcore_set_missing_device(self):
+        """Test unknown device id without device 0 raises NoSuchIdException."""
+        core = SimCore(devices=SimDevice(1, simdata=self.simdata2))
+        with pytest.raises(NoSuchIdException):
+            await core.async_setValues(device_id=4, func_code=6, address=1, values=[1])
+
+    async def test_simcore_get_defined_device(self):
+        """Test a defined device id is served when device 0 also exists."""
+        core = SimCore(
+            devices=[
+                SimDevice(0, simdata=self.simdata2),
+                SimDevice(1, simdata=SimData(1, datatype=DataType.INT16, values=17)),
+            ]
+        )
+        assert await core.async_getValues(device_id=1, func_code=3, address=1) == [17]
+        assert await core.async_getValues(device_id=4, func_code=3, address=1) == [16]
