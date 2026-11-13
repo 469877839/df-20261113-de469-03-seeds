@@ -1,0 +1,70 @@
+from typing import Generic
+
+from .dbc_attribute_definition import (
+    DbcAttributeDefinition,
+    DbcAttributeValueTypeVar,
+)
+
+
+class DbcAttribute(Generic[DbcAttributeValueTypeVar]):
+    """An attribute that can be associated with nodes/messages/signals.
+
+    """
+
+    def __init__(self,
+                 value: DbcAttributeValueTypeVar,
+                 definition: DbcAttributeDefinition[DbcAttributeValueTypeVar]) -> None:
+        self._value: DbcAttributeValueTypeVar = value
+        self._definition: DbcAttributeDefinition[DbcAttributeValueTypeVar] = definition
+
+    @property
+    def name(self) -> str:
+        """The attribute name as a string.
+
+        """
+
+        return self._definition.name
+
+    @property
+    def value(self) -> DbcAttributeValueTypeVar:
+        """The value that this attribute has.
+
+        """
+
+        return self._value
+
+    @value.setter
+    def value(self, value: DbcAttributeValueTypeVar) -> None:
+        self._value = value
+
+    @property
+    def formatted_value(self) -> str:
+        """The value of the attribute as it appears in the DBC file
+
+        """
+        if self.definition.type_name == "STRING":
+            # The DBC parser only unescapes quotes, not backslashes.
+            value = str(self._value).replace('"', '\\"')
+            return f'"{value}"'
+
+        return f'{self._value}'
+
+    @property
+    def definition(self) -> DbcAttributeDefinition[DbcAttributeValueTypeVar]:
+        """The attribute definition.
+
+        """
+
+        return self._definition
+
+    def __repr__(self) -> str:
+        return f"attribute('{self.name}', {self.value})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DbcAttribute):
+            return NotImplemented
+
+        return self.definition == other.definition and self.value == other.value
+
+
+DbcAttributeType = DbcAttribute[str] | DbcAttribute[int] | DbcAttribute[float]
