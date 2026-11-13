@@ -1,0 +1,9 @@
+*.egg-info/
+*.pyc
+*.pyd
+*.pyo
+*.sublime-*
+*.xlsb
+build/
+dist/
+venv/
