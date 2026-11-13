@@ -1,0 +1,31 @@
+# Keep GitHub Actions up to date with GitHub's Dependabot...
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/keeping-your-actions-up-to-date-with-dependabot
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#package-ecosystem
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    groups:
+      github-actions:
+        patterns:
+          - "*"  # Group all Actions updates into a single larger pull request
+    schedule:
+      interval: weekly
+  # Python dependencies. The `uv` ecosystem covers pyproject.toml *and* uv.lock,
+  # so a bump updates both together -- a PR that edited only pyproject.toml
+  # would leave the lockfile stale and red every `uv sync --locked` job.
+  #
+  # There is deliberately no `pip` entry. pip has no per-file scoping: it
+  # discovers every manifest under `directory`, pyproject.toml included, so it
+  # would keep opening exactly those lockfile-stale PRs (as #803 did) and
+  # compete with this entry for the same bumps. pex-requirements.txt is
+  # generated from uv.lock at build time (tools/pex_requirements.py), so a
+  # lockfile bump here is all it takes to change what the pex bundles.
+  - package-ecosystem: uv
+    directory: /
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"  # Group all Python dependency updates into a single pull request
+    schedule:
+      interval: weekly
