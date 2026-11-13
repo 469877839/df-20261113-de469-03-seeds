@@ -1,0 +1,51 @@
+{
+    "author": {
+        "id": "usrLkNDICXNqxSDhG",
+        "email": "author@example.com"
+    },
+    "createdTime": "2019-01-03T12:33:12.421Z",
+    "id": "comLkNDICXNqxSDhG",
+    "lastUpdatedTime": "2019-01-03T12:33:12.421Z",
+    "text": "Hello, @[usr00000mentioned]!",
+    "mentioned": {
+        "usr00000mentioned": {
+            "displayName": "Alice Doe",
+            "id": "usr00000mentioned",
+            "email": "alice@example.com",
+            "type": "user"
+        }
+    },
+    "parentCommentId": "comkNDICXNqxSDhGL",
+    "reactions": [
+        {
+            "emoji": {"unicodeCharacter": "1f44d"},
+            "reactingUser": {
+                "userId": "usr0000000reacted",
+                "email": "carol@example.com"
+            }
+        },
+        {
+            "emoji": {"unicodeCharacter": "1f468-200d-1f469-200d-1f466"},
+            "reactingUser": {
+                "userId": "usr0000000reacted",
+                "email": "carol@example.com"
+            }
+        }
+    ],
+    "attachments": [
+        {
+            "id": "attLkNDICXNqxSDhG",
+            "url": "https://example.com/cat.png",
+            "filename": "cat.png",
+            "type": "image/png",
+            "size": 12345,
+            "height": 600,
+            "width": 800,
+            "thumbnails": {
+                "small": {"url": "https://example.com/cat-small.png", "width": 36, "height": 27},
+                "large": {"url": "https://example.com/cat-large.png", "width": 512, "height": 384},
+                "full": {"url": "https://example.com/cat-full.png", "width": 800, "height": 600}
+            }
+        }
+    ]
+}

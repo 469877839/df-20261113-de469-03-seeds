@@ -1,0 +1,6 @@
+# Required to run test suite
+mock
+pytest
+pytest-cov
+requests-mock
+tox

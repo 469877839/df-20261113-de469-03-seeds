@@ -1,0 +1,834 @@
+from datetime import datetime, timezone
+from unittest.mock import Mock, call, patch
+
+import pytest
+
+from pyairtable.api.base import Base
+from pyairtable.api.enterprise import (
+    DeleteUsersResponse,
+    Enterprise,
+    ManageUsersResponse,
+    PersonalAccessToken,
+    RevokeTokensResponse,
+    UpdateAiAllowlistResponse,
+)
+from pyairtable.exceptions import InvalidParameterError, MissingRecordError
+from pyairtable.models.audit import AuditLogEvent
+from pyairtable.models.schema import EnterpriseInfo, Package, UserGroup, UserInfo
+from pyairtable.testing import fake_id
+
+N_AUDIT_PAGES = 15
+N_AUDIT_PAGE_SIZE = 10
+
+
+@pytest.fixture(autouse=True)
+def enterprise_mocks(enterprise, requests_mock, sample_json):
+    m = Mock()
+    m.json_user = sample_json("UserInfo")
+    m.json_users = {"users": [m.json_user]}
+    m.json_group = sample_json("UserGroup")
+    m.json_enterprise = sample_json("EnterpriseInfo")
+    m.user_id = m.json_user["id"]
+    m.group_id = m.json_group["id"]
+    m.get_info = requests_mock.get(
+        enterprise_url := "https://api.airtable.com/v0/meta/enterpriseAccounts/entUBq2RGdihxl3vU",
+        json=m.json_enterprise,
+    )
+    m.get_user = requests_mock.get(
+        f"{enterprise_url}/users/usrL2PNC5o3H4lBEi",
+        json=m.json_user,
+    )
+    m.get_users = requests_mock.get(
+        f"{enterprise_url}/users",
+        json=m.json_users,
+    )
+    m.get_group = requests_mock.get(
+        "https://api.airtable.com/v0/meta/groups/ugp1mKGb3KXUyQfOZ",
+        json=m.json_group,
+    )
+    m.get_audit_log = requests_mock.get(
+        f"{enterprise_url}/auditLogEvents",
+        response_list=[
+            {
+                "json": {
+                    "events": fake_audit_log_events(n),
+                    "pagination": (
+                        None if n == N_AUDIT_PAGES - 1 else {"previous": "dummy"}
+                    ),
+                }
+            }
+            for n in range(N_AUDIT_PAGES)
+        ],
+    )
+    m.remove_user = requests_mock.post(
+        f"{enterprise_url}/users/{m.user_id}/remove",
+        json=sample_json("UserRemoved"),
+    )
+    m.claim_users = requests_mock.post(
+        f"{enterprise_url}/claim/users",
+        json={"errors": []},
+    )
+    m.create_descendants = requests_mock.post(
+        f"{enterprise_url}/descendants", json={"id": fake_id("ent")}
+    )
+    m.move_groups_json = {}
+    m.move_groups = requests_mock.post(
+        f"{enterprise_url}/moveGroups", json=m.move_groups_json
+    )
+    m.move_workspaces_json = {}
+    m.move_workspaces = requests_mock.post(
+        f"{enterprise_url}/moveWorkspaces", json=m.move_workspaces_json
+    )
+    m.json_package = sample_json("Package")
+    m.json_packages = {"packages": [m.json_package]}
+    m.get_packages = requests_mock.get(
+        f"{enterprise_url}/packages",
+        json=m.json_packages,
+    )
+    m.json_pat = sample_json("PersonalAccessToken")
+    m.list_pats = requests_mock.get(
+        f"{enterprise_url}/personalAccessTokens",
+        json={"personalAccessTokens": [m.json_pat]},
+    )
+    m.revoke_pats_json = {
+        "errors": [
+            {
+                "message": "Token has already been revoked.",
+                "tokenId": "patZp6Lw9Dq3VxTn5",
+                "type": "ALREADY_REVOKED",
+            }
+        ],
+        "revokedTokens": [{"id": "pat8fN3RkQx9ZLm2T", "userId": "usrL2PNC5o3H4lBEi"}],
+    }
+    m.revoke_pats = requests_mock.post(
+        f"{enterprise_url}/personalAccessTokens/revoke",
+        json=m.revoke_pats_json,
+    )
+    m.allow_ai = requests_mock.post(
+        f"{enterprise_url}/workspaceAiAllowlist",
+        json={"errors": []},
+    )
+    return m
+
+
+def fake_audit_log_events(counter, page_size=N_AUDIT_PAGE_SIZE):
+    return [
+        {
+            "id": str(counter * 1000 + n),
+            "timestamp": datetime.now().isoformat(),
+            "action": "viewBase",
+            "actor": {"type": "anonymousUser"},
+            "modelId": (base_id := fake_id("app")),
+            "modelType": "base",
+            "payload": {"name": "The Base Name"},
+            "payloadVersion": "1.0",
+            "context": {
+                "baseId": base_id,
+                "actionId": fake_id("act"),
+                "enterpriseAccountId": fake_id("ent"),
+                "workspaceId": fake_id("wsp"),
+            },
+            "origin": {
+                "ipAddress": "8.8.8.8",
+                "oauthAppClientId": "cliR8ZT9KtIgp8Bh3",
+                "source": "server",
+                "userAgent": "Internet Explorer",
+            },
+        }
+        for n in range(page_size)
+    ]
+
+
+def test_info(enterprise, enterprise_mocks):
+    assert isinstance(info := enterprise.info(), EnterpriseInfo)
+    assert info.id == "entUBq2RGdihxl3vU"
+    assert info.workspace_ids == ["wspmhESAta6clCCwF", "wspHvvm4dAktsStZH"]
+    assert info.email_domains[0].is_sso_required is True
+    assert enterprise_mocks.get_info.call_count == 1
+
+    assert enterprise.info(force=True).id == "entUBq2RGdihxl3vU"
+    assert enterprise_mocks.get_info.call_count == 2
+    assert "aggregated" not in enterprise_mocks.get_info.last_request.qs
+    assert "descendants" not in enterprise_mocks.get_info.last_request.qs
+
+
+def test_info__aggregated_descendants(enterprise, enterprise_mocks):
+    enterprise_mocks.json_enterprise["aggregated"] = {
+        "groupIds": ["ugp1mKGb3KXUyQfOZ"],
+        "userIds": ["usrL2PNC5o3H4lBEi"],
+        "workspaceIds": ["wspmhESAta6clCCwF"],
+    }
+    enterprise_mocks.json_enterprise["descendants"] = {
+        (sub_ent_id := fake_id("ent")): {
+            "groupIds": ["ugp1mKGb3KXUyDESC"],
+            "userIds": ["usrL2PNC5o3H4DESC"],
+            "workspaceIds": ["wspmhESAta6clDESC"],
+        }
+    }
+    info = enterprise.info(aggregated=True, descendants=True)
+    assert enterprise_mocks.get_info.call_count == 1
+    assert enterprise_mocks.get_info.last_request.qs["include"] == [
+        "aggregated",
+        "descendants",
+    ]
+    assert info.aggregated.group_ids == ["ugp1mKGb3KXUyQfOZ"]
+    assert info.aggregated.user_ids == ["usrL2PNC5o3H4lBEi"]
+    assert info.aggregated.workspace_ids == ["wspmhESAta6clCCwF"]
+    assert info.descendants[sub_ent_id].group_ids == ["ugp1mKGb3KXUyDESC"]
+    assert info.descendants[sub_ent_id].user_ids == ["usrL2PNC5o3H4DESC"]
+    assert info.descendants[sub_ent_id].workspace_ids == ["wspmhESAta6clDESC"]
+
+
+def test_user(enterprise, enterprise_mocks):
+    user = enterprise.user(enterprise_mocks.user_id)
+    assert isinstance(user, UserInfo)
+    assert enterprise_mocks.get_users.call_count == 1
+    assert user.is_agent_user is True
+    assert user.collaborations
+    assert "appLkNDICXNqxSDhG" in user.collaborations.bases
+    assert "pbdyGA3PsOziEHPDE" in user.collaborations.interfaces
+    assert "wspmhESAta6clCCwF" in user.collaborations.workspaces
+
+
+def test_user__no_collaboration(enterprise, enterprise_mocks):
+    del enterprise_mocks.json_users["users"][0]["collaborations"]
+
+    user = enterprise.user(enterprise_mocks.user_id, collaborations=False)
+    assert isinstance(user, UserInfo)
+    assert enterprise_mocks.get_users.call_count == 1
+    assert not enterprise_mocks.get_users.last_request.qs.get("include")
+    assert not user.collaborations  # test for Collaborations.__bool__
+    assert not user.collaborations.bases
+    assert not user.collaborations.interfaces
+    assert not user.collaborations.workspaces
+
+
+def test_user__descendants(enterprise, enterprise_mocks):
+    enterprise_mocks.json_users["users"][0]["descendants"] = {
+        (other_ent_id := fake_id("ent")): {
+            "lastActivityTime": "2021-01-01T12:34:56Z",
+            "isAdmin": True,
+            "groups": [{"id": (fake_group_id := fake_id("ugp"))}],
+        }
+    }
+    user = enterprise.user(enterprise_mocks.user_id, descendants=True)
+    d = user.descendants[other_ent_id]
+    assert d.last_activity_time == datetime(2021, 1, 1, 12, 34, 56, tzinfo=timezone.utc)
+    assert d.is_admin is True
+    assert d.groups[0].id == fake_group_id
+
+
+def test_user__aggregates(enterprise, enterprise_mocks):
+    enterprise_mocks.json_users["users"][0]["aggregated"] = {
+        "lastActivityTime": "2021-01-01T12:34:56Z",
+        "isAdmin": True,
+        "groups": [{"id": (fake_group_id := fake_id("ugp"))}],
+    }
+    user = enterprise.user(enterprise_mocks.user_id, aggregated=True)
+    a = user.aggregated
+    assert a.last_activity_time == datetime(2021, 1, 1, 12, 34, 56, tzinfo=timezone.utc)
+    assert a.is_admin is True
+    assert a.groups[0].id == fake_group_id
+
+
+@pytest.mark.parametrize(
+    "search_for",
+    (
+        ["usrL2PNC5o3H4lBEi"],
+        ["foo@bar.com"],
+        ["usrL2PNC5o3H4lBEi", "foo@bar.com"],  # should not return duplicates
+    ),
+)
+def test_users(enterprise, search_for):
+    results = enterprise.users(search_for)
+    assert len(results) == 1
+    assert isinstance(user := results[0], UserInfo)
+    assert user.id == "usrL2PNC5o3H4lBEi"
+    assert user.state == "provisioned"
+
+
+def test_users__descendants(enterprise, enterprise_mocks):
+    enterprise_mocks.json_users["users"][0]["descendants"] = {
+        (other_ent_id := fake_id("ent")): {
+            "lastActivityTime": "2021-01-01T12:34:56Z",
+            "isAdmin": True,
+            "groups": [{"id": (fake_group_id := fake_id("ugp"))}],
+        }
+    }
+    users = enterprise.users([enterprise_mocks.user_id], descendants=True)
+    assert len(users) == 1
+    d = users[0].descendants[other_ent_id]
+    assert d.last_activity_time == datetime(2021, 1, 1, 12, 34, 56, tzinfo=timezone.utc)
+    assert d.is_admin is True
+    assert d.groups[0].id == fake_group_id
+
+
+def test_users__aggregates(enterprise, enterprise_mocks):
+    enterprise_mocks.json_users["users"][0]["aggregated"] = {
+        "lastActivityTime": "2021-01-01T12:34:56Z",
+        "isAdmin": True,
+        "groups": [{"id": (fake_group_id := fake_id("ugp"))}],
+    }
+    users = enterprise.users([enterprise_mocks.user_id], aggregated=True)
+    assert len(users) == 1
+    a = users[0].aggregated
+    assert a.last_activity_time == datetime(2021, 1, 1, 12, 34, 56, tzinfo=timezone.utc)
+    assert a.is_admin is True
+    assert a.groups[0].id == fake_group_id
+
+
+def test_group(enterprise, enterprise_mocks):
+    grp = enterprise.group("ugp1mKGb3KXUyQfOZ")
+    assert enterprise_mocks.get_group.call_count == 1
+    assert isinstance(grp, UserGroup)
+    assert grp.id == "ugp1mKGb3KXUyQfOZ"
+    assert grp.name == "Group name"
+    assert grp.members[0].email == "foo@bar.com"
+    assert grp.collaborations
+    assert "appLkNDICXNqxSDhG" in grp.collaborations.bases
+    assert "pbdyGA3PsOziEHPDE" in grp.collaborations.interfaces
+    assert "wspmhESAta6clCCwF" in grp.collaborations.workspaces
+
+
+def test_group__no_collaboration(enterprise, enterprise_mocks):
+    del enterprise_mocks.json_group["collaborations"]
+
+    grp = enterprise.group(enterprise_mocks.group_id, collaborations=False)
+    assert isinstance(grp, UserGroup)
+    assert enterprise_mocks.get_group.call_count == 1
+    assert not enterprise_mocks.get_group.last_request.qs.get("include")
+    assert not grp.collaborations  # test for Collaborations.__bool__
+    assert not grp.collaborations.bases
+    assert not grp.collaborations.interfaces
+    assert not grp.collaborations.workspaces
+
+
+@pytest.mark.parametrize(
+    "fncall,expected_size",
+    [
+        (call(), N_AUDIT_PAGES * N_AUDIT_PAGE_SIZE),
+        (call(page_limit=1), N_AUDIT_PAGE_SIZE),
+    ],
+)
+def test_audit_log(enterprise, fncall, expected_size):
+    """
+    Test that we iterate through multiple pages of the audit log. correctly
+    """
+    events = [
+        event
+        for page in enterprise.audit_log(*fncall.args, **fncall.kwargs)
+        for event in page.events
+    ]
+    assert len(events) == expected_size
+    assert events[0].origin.source == "server"
+    assert events[0].origin.oauth_app_client_id == "cliR8ZT9KtIgp8Bh3"
+
+    bare_origin = AuditLogEvent.Origin(
+        ipAddress="8.8.8.8", userAgent="Internet Explorer"
+    )
+    assert bare_origin.source is None
+    assert bare_origin.oauth_app_client_id is None
+
+
+def test_audit_log__no_loop(enterprise, requests_mock):
+    """
+    Test that an empty page of events does not cause an infinite loop.
+    """
+    requests_mock.get(
+        enterprise.api.build_url(
+            f"meta/enterpriseAccounts/{enterprise.id}/auditLogEvents"
+        ),
+        json={
+            "events": [],
+            "pagination": {"previous": "dummy"},
+        },
+    )
+    events = [event for page in enterprise.audit_log() for event in page.events]
+    assert len(events) == 0
+
+
+@pytest.mark.parametrize(
+    "fncall,sortorder,offset_field",
+    [
+        (call(), "descending", "previous"),
+        (call(sort_asc=True), "ascending", "next"),
+    ],
+)
+def test_audit_log__sortorder(
+    api,
+    enterprise,
+    enterprise_mocks,
+    fncall,
+    sortorder,
+    offset_field,
+):
+    """
+    Test that we calculate sortorder and offset_field correctly
+    dpeending on whether we're ascending or descending.
+    """
+    with patch.object(api, "iterate_requests", wraps=api.iterate_requests) as m:
+        list(enterprise.audit_log(*fncall.args, **fncall.kwargs))
+
+    request = enterprise_mocks.get_audit_log.last_request
+    assert request.qs["sortOrder"] == [sortorder]
+    assert m.mock_calls[-1].kwargs["offset_field"] == offset_field
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        (
+            {},
+            {"isDryRun": False},
+        ),
+        (
+            {"replacement": "otherUser"},
+            {"isDryRun": False, "replacementOwnerId": "otherUser"},
+        ),
+        (
+            {"descendants": True},
+            {"isDryRun": False, "removeFromDescendants": True},
+        ),
+    ],
+)
+def test_remove_user(enterprise, enterprise_mocks, kwargs, expected):
+    removed = enterprise.remove_user(enterprise_mocks.user_id, **kwargs)
+    assert enterprise_mocks.remove_user.call_count == 1
+    assert enterprise_mocks.remove_user.last_request.json() == expected
+    assert removed.shared.workspaces[0].user_id == "usrL2PNC5o3H4lBEi"
+
+
+@pytest.fixture
+def user_info(enterprise, enterprise_mocks):
+    user_info = enterprise.user(enterprise_mocks.user_id)
+    assert user_info._url == f"{enterprise.urls.users}/{user_info.id}"
+    return user_info
+
+
+def test_delete_user(user_info, requests_mock):
+    m = requests_mock.delete(user_info._url)
+    user_info.delete()
+    assert m.call_count == 1
+
+
+def test_manage_user(user_info, requests_mock):
+    m = requests_mock.patch(user_info._url)
+    user_info.save()
+    assert m.call_count == 1
+    assert m.last_request.json() == {"email": "foo@bar.com", "state": "provisioned"}
+
+
+def test_logout_user(user_info, requests_mock):
+    m = requests_mock.post(user_info._url + "/logout")
+    user_info.logout()
+    assert m.call_count == 1
+    assert m.last_request.body is None
+
+
+def test_claim_users(enterprise, enterprise_mocks):
+    result = enterprise.claim_users(
+        {
+            "usrFakeUserId": "managed",
+            "someone@example.com": "unmanaged",
+        }
+    )
+    assert isinstance(result, ManageUsersResponse)
+    assert enterprise_mocks.claim_users.call_count == 1
+    assert enterprise_mocks.claim_users.last_request.json() == {
+        "users": [
+            {"id": "usrFakeUserId", "state": "managed"},
+            {"email": "someone@example.com", "state": "unmanaged"},
+        ]
+    }
+
+
+def test_delete_users(enterprise, requests_mock):
+    response = {
+        "deletedUsers": [{"email": "foo@bar.com", "id": "usrL2PNC5o3H4lBEi"}],
+        "errors": [
+            {
+                "email": "bar@bam.com",
+                "message": "Invalid permissions",
+                "type": "INVALID_PERMISSIONS",
+            }
+        ],
+    }
+    emails = [f"foo{n}@bar.com" for n in range(5)]
+    m = requests_mock.delete(enterprise.urls.users, json=response)
+    parsed = enterprise.delete_users(emails)
+    assert m.call_count == 1
+    assert m.last_request.qs == {"email": emails}
+    assert isinstance(parsed, DeleteUsersResponse)
+    assert parsed.deleted_users[0].email == "foo@bar.com"
+    assert parsed.errors[0].type == "INVALID_PERMISSIONS"
+
+
+@pytest.mark.parametrize("action", ["grant", "revoke"])
+def test_manage_admin_access(enterprise, enterprise_mocks, requests_mock, action):
+    user = enterprise.user(enterprise_mocks.user_id)
+    m = requests_mock.post(enterprise.urls.admin_access(action), json={})
+    method = getattr(enterprise, f"{action}_admin")
+    result = method(
+        fake_user_id := fake_id("usr"),
+        fake_email := "fake@example.com",
+        user,
+    )
+    assert isinstance(result, ManageUsersResponse)
+    assert m.call_count == 1
+    assert m.last_request.json() == {
+        "users": [
+            {"id": fake_user_id},
+            {"email": fake_email},
+            {"id": user.id},
+        ]
+    }
+
+
+def test_create_descendant(enterprise, enterprise_mocks):
+    descendant = enterprise.create_descendant("Some name")
+    assert enterprise_mocks.create_descendants.call_count == 1
+    assert enterprise_mocks.create_descendants.last_request.json() == {
+        "name": "Some name"
+    }
+    assert isinstance(descendant, Enterprise)
+
+
+def test_create_workspace(enterprise, requests_mock):
+    from pyairtable.api.workspace import Workspace
+
+    workspace_id = fake_id("wsp")
+    m = requests_mock.post(
+        "https://api.airtable.com/v0/meta/workspaces",
+        json={"id": workspace_id},
+    )
+    result = enterprise.create_workspace("My New Workspace")
+    assert m.call_count == 1
+    assert m.last_request.json() == {
+        "enterpriseAccountId": enterprise.id,
+        "name": "My New Workspace",
+    }
+    assert isinstance(result, Workspace)
+    assert result.id == workspace_id
+
+
+# group_ids is typed as Iterable[str]; an iterator must not raise
+# TypeError: Object of type generator is not JSON serializable
+@pytest.mark.parametrize("container", [list, iter])
+def test_move_groups(api, enterprise, enterprise_mocks, container):
+    other_id = fake_id("ent")
+    group_ids = [fake_id("ugp") for _ in range(3)]
+    enterprise_mocks.move_groups_json["movedGroups"] = [
+        {"id": group_id} for group_id in group_ids
+    ]
+    for target in [other_id, api.enterprise(other_id)]:
+        enterprise_mocks.move_groups.reset()
+        result = enterprise.move_groups(container(group_ids), target)
+        assert enterprise_mocks.move_groups.call_count == 1
+        assert enterprise_mocks.move_groups.last_request.json() == {
+            "targetEnterpriseAccountId": other_id,
+            "groupIds": group_ids,
+        }
+        assert set(m.id for m in result.moved_groups) == set(group_ids)
+
+
+# workspace_ids is typed as Iterable[str]; an iterator must not raise
+# TypeError: Object of type generator is not JSON serializable
+@pytest.mark.parametrize("container", [list, iter])
+def test_move_workspaces(api, enterprise, enterprise_mocks, container):
+    other_id = fake_id("ent")
+    workspace_ids = [fake_id("wsp") for _ in range(3)]
+    enterprise_mocks.move_workspaces_json["movedWorkspaces"] = [
+        {"id": workspace_id} for workspace_id in workspace_ids
+    ]
+    for target in [other_id, api.enterprise(other_id)]:
+        enterprise_mocks.move_workspaces.reset()
+        result = enterprise.move_workspaces(container(workspace_ids), target)
+        assert enterprise_mocks.move_workspaces.call_count == 1
+        assert enterprise_mocks.move_workspaces.last_request.json() == {
+            "targetEnterpriseAccountId": other_id,
+            "workspaceIds": workspace_ids,
+        }
+        assert set(m.id for m in result.moved_workspaces) == set(workspace_ids)
+
+
+def test_packages(enterprise, enterprise_mocks):
+    packages = enterprise.packages()
+    assert enterprise_mocks.get_packages.call_count == 1
+    assert isinstance(packages, list)
+    assert len(packages) == 1
+    assert isinstance(packages[0], Package)
+    assert packages[0].id == "pkggUqk9xHiC4BeeH"
+    assert packages[0].name == "New Enterprise Managed App 1"
+    assert packages[0].type == "appTemplate"
+    assert packages[0].install_count == 12
+    assert packages[0].latest_release_id == "pkrsTB7Ic2RhsA4pe"
+    for key in ("shouldgetallpackagesingrid", "shouldGetAllPackagesInGrid"):
+        assert key not in enterprise_mocks.get_packages.last_request.qs
+
+
+def test_packages__all_enterprises(enterprise, enterprise_mocks):
+    packages = enterprise.packages(all_enterprises=True)
+    assert enterprise_mocks.get_packages.call_count == 1
+    assert isinstance(packages, list)
+    assert len(packages) == 1
+    assert isinstance(packages[0], Package)
+    assert ["True"] == enterprise_mocks.get_packages.last_request.qs[
+        "shouldGetAllPackagesInGrid"
+    ]
+
+
+def test_package(enterprise, enterprise_mocks):
+    package = enterprise.package("pkggUqk9xHiC4BeeH")
+    assert enterprise_mocks.get_packages.call_count == 1
+    assert isinstance(package, Package)
+    assert package.id == "pkggUqk9xHiC4BeeH"
+    assert package.name == "New Enterprise Managed App 1"
+
+
+def test_package__not_found(enterprise, enterprise_mocks):
+    with pytest.raises(MissingRecordError):
+        enterprise.package(fake_id("pkg"))
+
+
+def test_create_base_from_package__with_package_object(
+    enterprise, enterprise_mocks, base_id, workspace_id, requests_mock, sample_json
+):
+    package = Package.from_api(sample_json("Package"), enterprise.api)
+
+    url = enterprise.urls.package_install(package.id)
+    requests_mock.get(enterprise.api.urls.bases, json=sample_json("Bases"))
+    m = requests_mock.post(url, json={"id": base_id})
+
+    base = enterprise.create_base_from_package(
+        workspace_id, "My New Base", package, description="Test base"
+    )
+
+    assert isinstance(base, Base)
+    assert base.id == base_id
+    assert m.call_count == 1
+    assert m.last_request.json() == {
+        "name": "My New Base",
+        "packageReleaseId": package.latest_release_id,
+        "workspaceId": workspace_id,
+        "description": "Test base",
+    }
+
+
+def test_create_base_from_package__with_package_id(
+    enterprise, enterprise_mocks, base_id, workspace_id, requests_mock, sample_json
+):
+    package_id = enterprise_mocks.json_package["id"]
+    release_id = enterprise_mocks.json_package["latestReleaseId"]
+
+    url = enterprise.urls.package_install(package_id)
+    requests_mock.get(enterprise.api.urls.bases, json=sample_json("Bases"))
+    m = requests_mock.post(url, json={"id": base_id})
+
+    base = enterprise.create_base_from_package(workspace_id, "My New Base", package_id)
+
+    assert isinstance(base, Base)
+    assert base.id == base_id
+    assert m.call_count == 1
+    assert m.last_request.json() == {
+        "name": "My New Base",
+        "packageReleaseId": release_id,
+        "workspaceId": workspace_id,
+    }
+
+
+def test_create_base_from_package__with_release_id(
+    enterprise, enterprise_mocks, base_id, workspace_id, requests_mock, sample_json
+):
+    release_id = enterprise_mocks.json_package["latestReleaseId"]
+
+    url = enterprise.urls.package_install(release_id)
+    requests_mock.get(enterprise.api.urls.bases, json=sample_json("Bases"))
+    m = requests_mock.post(url, json={"id": base_id})
+
+    base = enterprise.create_base_from_package(workspace_id, "My New Base", release_id)
+
+    assert isinstance(base, Base)
+    assert base.id == base_id
+    assert m.call_count == 1
+    assert m.last_request.json() == {
+        "name": "My New Base",
+        "packageReleaseId": release_id,
+        "workspaceId": workspace_id,
+    }
+    assert enterprise_mocks.get_packages.call_count == 0
+
+
+def test_create_base_from_package__non_package_string_passes_through(
+    enterprise, enterprise_mocks, base_id, workspace_id, requests_mock, sample_json
+):
+    arbitrary = fake_id("xyz")
+
+    url = enterprise.urls.package_install(arbitrary)
+    requests_mock.get(enterprise.api.urls.bases, json=sample_json("Bases"))
+    m = requests_mock.post(url, json={"id": base_id})
+
+    base = enterprise.create_base_from_package(workspace_id, "My New Base", arbitrary)
+
+    assert isinstance(base, Base)
+    assert base.id == base_id
+    assert m.call_count == 1
+    assert m.last_request.json() == {
+        "name": "My New Base",
+        "packageReleaseId": arbitrary,
+        "workspaceId": workspace_id,
+    }
+    assert enterprise_mocks.get_packages.call_count == 0
+
+
+def test_create_base_from_package__package_id_not_found(
+    enterprise, enterprise_mocks, workspace_id
+):
+    with pytest.raises(MissingRecordError):
+        enterprise.create_base_from_package(workspace_id, "My New Base", fake_id("pkg"))
+
+
+def test_create_base_from_package__package_id_with_no_latest_release(
+    enterprise, enterprise_mocks, workspace_id, requests_mock, sample_json
+):
+    package_json = sample_json("Package")
+    package_json["latestReleaseId"] = None
+    requests_mock.get(enterprise.urls.packages, json={"packages": [package_json]})
+
+    with pytest.raises(InvalidParameterError):
+        enterprise.create_base_from_package(
+            workspace_id, "My New Base", package_json["id"]
+        )
+
+
+def test_create_base_from_package__package_object_with_no_latest_release(
+    enterprise, enterprise_mocks, workspace_id, sample_json
+):
+    package_json = sample_json("Package")
+    package_json["latestReleaseId"] = None
+    package = Package.from_api(package_json, enterprise.api)
+
+    with pytest.raises(InvalidParameterError):
+        enterprise.create_base_from_package(workspace_id, "My New Base", package)
+
+
+def test_create_base(api, base_id, workspace_id, requests_mock, sample_json):
+    enterprise_id = fake_id("ent")
+    enterprise = api.enterprise(enterprise_id)
+
+    requests_mock.get(api.urls.bases, json=sample_json("Bases"))
+    m = requests_mock.post(api.urls.bases, json={"id": base_id})
+
+    base = enterprise.create_base(workspace_id, "My New Base", [{"name": "Table1"}])
+
+    assert isinstance(base, Base)
+    assert base.id == base_id
+    assert m.call_count == 1
+    assert m.last_request.json() == {
+        "name": "My New Base",
+        "workspaceId": workspace_id,
+        "tables": [{"name": "Table1"}],
+    }
+
+
+def test_access_tokens(enterprise, enterprise_mocks):
+    tokens = enterprise.access_tokens()
+    assert enterprise_mocks.list_pats.call_count == 1
+    assert "includeresources" not in enterprise_mocks.list_pats.last_request.qs
+    assert len(tokens) == 1
+    assert isinstance(pat := tokens[0], PersonalAccessToken)
+    assert pat.id == "pat8fN3RkQx9ZLm2T"
+    assert pat.name == "Integration token"
+    assert pat.state == "active"
+    assert pat.scopes == ["data.records:read", "enterprise.account:read"]
+    assert pat.resource_access.mode == "enterprise"
+    assert pat.resource_access.enterprise_account_id == "entUBq2RGdihxl3vU"
+    assert pat.created_time == datetime(2023, 1, 1, tzinfo=timezone.utc)
+    assert pat.user_id == "usrL2PNC5o3H4lBEi"
+    assert pat.created_by_user_id == "usrL2PNC5o3H4lBEi"
+
+
+def test_access_tokens__include_resources(enterprise, enterprise_mocks):
+    enterprise.access_tokens(resources=True)
+    assert enterprise_mocks.list_pats.call_count == 1
+    assert enterprise_mocks.list_pats.last_request.qs["includeResources"] == ["True"]
+
+
+@pytest.mark.parametrize(
+    "resource_access",
+    [
+        {"mode": "all"},
+        {"mode": "enterprise"},
+        {"mode": "specificModelIds", "resourceModelIds": ["appLkNDICXNqxSDhG"]},
+    ],
+)
+def test_access_tokens__resource_access(enterprise, enterprise_mocks, resource_access):
+    enterprise_mocks.json_pat["resourceAccess"] = resource_access
+    (pat,) = enterprise.access_tokens()
+    assert pat.resource_access.mode == resource_access["mode"]
+    assert pat.resource_access.resource_model_ids == resource_access.get(
+        "resourceModelIds"
+    )
+
+
+# token_ids accepts a single str or any iterable of str
+@pytest.mark.parametrize(
+    "token_ids,expected",
+    [
+        ("pat8fN3RkQx9ZLm2T", ["pat8fN3RkQx9ZLm2T"]),
+        (
+            ["pat8fN3RkQx9ZLm2T", "patZp6Lw9Dq3VxTn5"],
+            ["pat8fN3RkQx9ZLm2T", "patZp6Lw9Dq3VxTn5"],
+        ),
+        (iter(["pat8fN3RkQx9ZLm2T"]), ["pat8fN3RkQx9ZLm2T"]),
+    ],
+)
+def test_revoke_access_tokens(enterprise, enterprise_mocks, token_ids, expected):
+    result = enterprise.revoke_access_tokens(token_ids)
+    assert enterprise_mocks.revoke_pats.call_count == 1
+    assert enterprise_mocks.revoke_pats.last_request.json() == {"tokenIds": expected}
+    assert isinstance(result, RevokeTokensResponse)
+    assert result.revoked_tokens[0].id == "pat8fN3RkQx9ZLm2T"
+    assert result.revoked_tokens[0].user_id == "usrL2PNC5o3H4lBEi"
+    assert result.errors[0].type == "ALREADY_REVOKED"
+    assert result.errors[0].token_id == "patZp6Lw9Dq3VxTn5"
+
+
+def test_allow_ai(api, enterprise, enterprise_mocks):
+    result = enterprise.allow_ai(
+        {api.workspace("wspmhESAta6clCCwF"): True, "wspHvvm4dAktsStZH": False}
+    )
+    assert enterprise_mocks.allow_ai.call_count == 1
+    assert enterprise_mocks.allow_ai.last_request.json() == {
+        "workspaces": [
+            {"workspaceId": "wspmhESAta6clCCwF", "isAllowed": True},
+            {"workspaceId": "wspHvvm4dAktsStZH", "isAllowed": False},
+        ]
+    }
+    assert isinstance(result, UpdateAiAllowlistResponse)
+    assert result.errors == []
+
+
+def test_allow_ai__descendants(enterprise, enterprise_mocks):
+    enterprise.allow_ai({"wspmhESAta6clCCwF": True}, descendants=True)
+    assert enterprise_mocks.allow_ai.last_request.json() == {
+        "workspaces": [{"workspaceId": "wspmhESAta6clCCwF", "isAllowed": True}],
+        "includeDescendantWorkspaces": True,
+    }
+
+
+def test_allow_ai__errors(enterprise, enterprise_mocks, requests_mock):
+    requests_mock.post(
+        enterprise.urls.workspace_ai_allowlist,
+        json={
+            "errors": [
+                {
+                    "type": "WORKSPACE_NOT_FOUND",
+                    "message": "Workspace not found",
+                    "workspaceId": "wspFakeWorkspaceId",
+                }
+            ]
+        },
+    )
+    result = enterprise.allow_ai({"wspFakeWorkspaceId": True})
+    assert result.errors[0].type == "WORKSPACE_NOT_FOUND"
+    assert result.errors[0].workspace_id == "wspFakeWorkspaceId"

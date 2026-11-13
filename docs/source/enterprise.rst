@@ -1,0 +1,236 @@
+.. include:: _substitutions.rst
+.. include:: _warn_latest.rst
+
+
+Enterprise Features
+==============================
+
+
+Retrieving information
+----------------------
+
+pyAirtable exposes a number of classes and methods for interacting with enterprise organizations.
+The following methods are only available on an `Enterprise plan <https://airtable.com/pricing>`__.
+If you call one of them against a base that is not part of an enterprise workspace, Airtable will
+return a 404 error, and pyAirtable will add a reminder to the exception to check your billing plan.
+
+.. automethod:: pyairtable.Api.enterprise
+    :noindex:
+
+.. automethod:: pyairtable.Base.collaborators
+    :noindex:
+
+.. automethod:: pyairtable.Base.shares
+    :noindex:
+
+.. automethod:: pyairtable.Workspace.collaborators
+    :noindex:
+
+.. automethod:: pyairtable.Enterprise.info
+    :noindex:
+
+
+Retrieving audit logs
+---------------------
+
+.. automethod:: pyairtable.Enterprise.audit_log
+    :noindex:
+
+
+Managing permissions and shares
+-------------------------------
+
+You can use pyAirtable to change permissions on a base or workspace
+via the following methods exposed on schema objects.
+
+If for some reason you need to call these API endpoints without first retrieving
+schema information, you might consider calling :meth:`~pyairtable.Api.request` directly.
+
+`Add base collaborator <https://airtable.com/developers/web/api/add-base-collaborator>`__
+
+    >>> base.collaborators().add_user("usrUserId", "read")
+    >>> base.collaborators().add_group("ugpGroupId", "edit")
+    >>> base.collaborators().add("user", "usrUserId", "comment")
+
+`Add interface collaborator <https://airtable.com/developers/web/api/add-interface-collaborator>`__
+
+    >>> base.collaborators().interfaces[pbd].add_user("usrUserId", "read")
+    >>> base.collaborators().interfaces[pbd].add_group("ugpGroupId", "read")
+    >>> base.collaborators().interfaces[pbd].add("user", "usrUserId", "read")
+
+`Add workspace collaborator <https://airtable.com/developers/web/api/add-workspace-collaborator>`__
+
+    >>> workspace.collaborators().add_user("usrUserId", "read")
+    >>> workspace.collaborators().add_group("ugpGroupId", "edit")
+    >>> workspace.collaborators().add("user", "usrUserId", "comment")
+
+`Update collaborator base permission <https://airtable.com/developers/web/api/update-collaborator-base-permission>`__
+
+    >>> base.collaborators().update("usrUserId", "edit")
+    >>> base.collaborators().update("ugpGroupId", "edit")
+
+`Update interface collaborator <https://airtable.com/developers/web/api/update-interface-collaborator>`__
+
+    >>> base.collaborators().interfaces[pbd].update("usrUserId", "edit")
+    >>> base.collaborators().interfaces[pbd].update("ugpGroupId", "edit")
+
+`Update workspace collaborator <https://airtable.com/developers/web/api/update-workspace-collaborator>`__
+
+    >>> workspace.collaborators().update("usrUserId", "edit")
+    >>> workspace.collaborators().update("ugpGroupId", "edit")
+
+`Delete base collaborator <https://airtable.com/developers/web/api/delete-base-collaborator>`__
+
+    >>> base.collaborators().remove("usrUserId")
+    >>> base.collaborators().remove("ugpGroupId")
+
+`Delete interface collaborator <https://airtable.com/developers/web/api/delete-interface-collaborator>`__
+
+    >>> base.collaborators().interfaces[pbd].remove("usrUserId")
+    >>> base.collaborators().interfaces[pbd].remove("ugpGroupId")
+
+`Delete workspace collaborator <https://airtable.com/developers/web/api/delete-workspace-collaborator>`__
+
+    >>> workspace.collaborators().remove("usrUserId")
+    >>> workspace.collaborators().remove("ugpGroupId")
+
+`Delete base invite <https://airtable.com/developers/web/api/delete-base-invite>`__
+
+    >>> base.collaborators().invite_links.via_base[0].delete()
+    >>> workspace.collaborators().invite_links.via_base[0].delete()
+
+`Delete interface invite <https://airtable.com/developers/web/api/delete-interface-invite>`__
+
+    >>> base.collaborators().interfaces[pbd].invite_links[0].delete()
+
+`Delete workspace invite <https://airtable.com/developers/web/api/delete-workspace-invite>`__
+
+    >>> base.collaborators().invite_links.via_workspace[0].delete()
+    >>> workspace.collaborators().invite_links.via_workspace[0].delete()
+
+`Manage share <https://airtable.com/developers/web/api/manage-share>`__
+
+    >>> share = base.shares()[0]
+    >>> share.disable()
+    >>> share.enable()
+
+`Delete share <https://airtable.com/developers/web/api/delete-share>`__
+
+    >>> share.delete()
+
+`Update workspace restrictions <https://airtable.com/developers/web/api/update-workspace-restrictions>`__
+
+    >>> r = workspace.collaborators().restrictions
+    >>> r.invite_creation = "unrestricted"
+    >>> r.share_creation = "onlyOwners"
+    >>> r.save()
+
+
+Managing users
+-------------------
+
+You can use pyAirtable to manage an enterprise's users
+via the following methods.
+
+`Manage user <https://airtable.com/developers/web/api/manage-user>`__
+
+    >>> user = enterprise.user("usrUserId")
+    >>> user.state = "deactivated"
+    >>> user.email = user.email.replace("@", "+deactivated@")
+    >>> user.save()
+
+`Logout user <https://airtable.com/developers/web/api/logout-user>`__
+
+    >>> user.logout()
+
+`Delete user by id <https://airtable.com/developers/web/api/delete-user-by-id>`__
+
+    >>> user.delete()
+
+`Remove user from enterprise <https://airtable.com/developers/web/api/remove-user-from-enterprise>`__
+
+    >>> enterprise.remove_user("usrUserId", replacement="usrOtherUserId")
+
+`Manage user membership <https://airtable.com/developers/web/api/manage-user-membership>`__
+
+    >>> enterprise.claim_users({"userId": "managed"})
+
+`Delete users by email <https://airtable.com/developers/web/api/delete-users-by-email>`__
+
+    >>> enterprise.delete_users(["foo@example.com", "bar@example.com"])
+
+`Grant admin access <https://airtable.com/developers/web/api/grant-admin-access>`__
+
+    >>> enterprise.grant_admin("usrUserId")
+    >>> enterprise.grant_admin("user@example.com")
+    >>> enterprise.grant_admin(enterprise.user("usrUserId"))
+
+`Revoke admin access <https://airtable.com/developers/web/api/revoke-admin-access>`__
+
+    >>> enterprise.revoke_admin("usrUserId")
+    >>> enterprise.revoke_admin("user@example.com")
+    >>> enterprise.revoke_admin(enterprise.user("usrUserId"))
+
+`List personal access tokens <https://airtable.com/developers/web/api/list-enterprise-personal-access-tokens>`__
+
+    >>> enterprise.access_tokens()
+
+`Revoke personal access tokens <https://airtable.com/developers/web/api/revoke-enterprise-personal-access-tokens>`__
+
+    >>> enterprise.revoke_access_tokens(["patTokenId1", "patTokenId2"])
+
+
+Managing workspaces and organizations
+--------------------------------------
+
+You can use pyAirtable to manage workspaces, user groups, and descendant enterprises
+via the following methods.
+
+`Create workspace <https://airtable.com/developers/web/api/create-workspace>`__
+
+    >>> workspace_id = enterprise.create_workspace("My New Workspace")
+
+`Move workspaces <https://airtable.com/developers/web/api/move-workspaces>`__
+
+    >>> enterprise.move_workspaces(["wspId1", "wspId2"], "entTargetEnterpriseId")
+
+`Move user groups <https://airtable.com/developers/web/api/move-user-groups>`__
+
+    >>> enterprise.move_groups(["ugpId1", "ugpId2"], "entTargetEnterpriseId")
+
+`Create descendant enterprise <https://airtable.com/developers/web/api/create-descendant-enterprise>`__
+
+    >>> descendant = enterprise.create_descendant("Descendant Organization Name")
+
+`Update workspace AI allowlist <https://airtable.com/developers/web/api/update-workspace-ai-allowlist>`__
+
+    >>> enterprise.allow_ai({"wspId1": True, "wspId2": False})
+
+
+Managing bases and packages
+---------------------------
+
+You can use pyAirtable to create bases inside an enterprise workspace, list enterprise packages
+available to use, and create new bases using those packages.
+
+`Create base <https://airtable.com/developers/web/api/create-base>`__
+
+    >>> base = enterprise.create_base("wspWorkspaceId", "My New Base", tables=[...])
+
+`List packages <https://airtable.com/developers/web/api/list-enterprise-packages>`__
+
+    >>> for package in enterprise.packages():
+    ...     print(package.id, package.name)
+    >>> # Across the entire enterprise grid (root accounts only):
+    >>> all_packages = enterprise.packages(all_enterprises=True)
+    >>> # Look up a single package by ID:
+    >>> package = enterprise.package("pkgPackageId")
+
+`Create base from package <https://airtable.com/developers/web/api/create-base-from-package-enterprise>`__
+
+    >>> # Install a package's latest release; accepts a Package, a package ID, or a package release ID:
+    >>> base = enterprise.create_base_from_package(
+    ...     workspace="wspWorkspaceId",
+    ...     name="My New Base",
+    ...     package_or_release="pkrPackageReleaseId",
+    ... )
