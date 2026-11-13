@@ -1,0 +1,32 @@
+{% set name = "influxdb_client" %}
+{% set version = "1.50.0" %}
+
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  url: https://files.pythonhosted.org/packages/07/23/77a945465a556a8067917ba84bac04e312cee2a4fe03d41198fe79ed9c84/influxdb_client-1.50.0.tar.gz
+  sha256: c2a4906573097103fa6f9a2ab08efe2eb48c2fed60b8129a3e320affde445743
+
+build:
+  number: 0
+  noarch: python
+  script: {{ PYTHON }} -m pip install . -vv
+
+requirements:
+  host:
+    - python >=3.7
+    - pip
+    - setuptools >=21.0.0
+  run:
+    - python >=3.7
+
+about:
+  home: https://github.com/influxdata/influxdb-client-python
+  license: MIT License
+  license_file: ../LICENSE
+  summary: The Python client library for the InfluxDB 2.0.
+  dev_url: https://github.com/influxdata/influxdb-client-python
+

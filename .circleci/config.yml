@@ -1,0 +1,214 @@
+version: 2.1
+
+commands:
+  influxdb-onboarding:
+    steps:
+      - run:
+          name: "Post onBoarding request to InfluxDB 2"
+          command: ./scripts/influxdb-onboarding.sh
+  prepare:
+    description: "Prepare environment to tests"
+    steps:
+      - checkout
+      - influxdb-onboarding
+  client-test:
+    description: "Run tests"
+    parameters:
+      python-image:
+        type: string
+      enabled-ciso-8601:
+        type: boolean
+    steps:
+      - restore_cache:
+          name: Restoring Pip Cache
+          keys:
+            - &cache-key pip-cache-v11-<< parameters.python-image >>-<< parameters.enabled-ciso-8601 >>-{{ checksum "setup.py" }}
+            - pip-cache-v11-<< parameters.python-image >>-<< parameters.enabled-ciso-8601 >>-
+      - run:
+          name: "Running tests"
+          command: ./scripts/ci-test.sh
+      - save_cache:
+          name: Saving Pip Cache
+          key: *cache-key
+          paths:
+            - ".venv"
+            - "~/.cache/pip"
+            - "/usr/local/lib/site-python"
+          when: always
+jobs:
+  tests-python:
+    parameters:
+      python-image:
+        type: string
+        default: &default-python "cimg/python:3.7"
+      influxdb-image:
+        type: string
+        default: &default-influxdb "influxdb:latest"
+      enabled-ciso-8601:
+        type: boolean
+        default: true
+    docker:
+      - image: << parameters.python-image >>
+        environment: # environment variables for primary container
+          PIPENV_VENV_IN_PROJECT: true
+          ENABLED_CISO_8601: << parameters.enabled-ciso-8601 >>
+      - image: << parameters.influxdb-image >>
+        environment:
+          INFLUXD_HTTP_BIND_ADDRESS: :8086
+    steps:
+      - prepare
+      - client-test:
+          python-image: << parameters.python-image >>
+          enabled-ciso-8601: << parameters.enabled-ciso-8601 >>
+      - store_test_results:
+          path: test-reports
+      - run:
+          name: Collecting coverage reports
+          command: |
+            curl -Os https://uploader.codecov.io/latest/linux/codecov
+            curl -Os https://uploader.codecov.io/latest/linux/codecov.SHA256SUM
+            curl -Os https://uploader.codecov.io/latest/linux/codecov.SHA256SUM.sig
+            curl -fsSL https://uploader.codecov.io/verification.gpg | gpg --no-default-keyring --keyring trustedkeys.gpg --import
+            gpgv codecov.SHA256SUM.sig codecov.SHA256SUM
+            shasum -a 256 -c codecov.SHA256SUM
+            chmod +x ./codecov
+            ./codecov
+  check-code-style:
+    docker:
+      - image: *default-python
+        environment:
+          PIPENV_VENV_IN_PROJECT: true
+    steps:
+      - checkout
+      - run:
+          name: Checks style consistency across sources.
+          command: |
+            pip install flake8 --user
+            flake8 influxdb_client/
+  check-twine:
+    docker:
+      - image: *default-python
+        environment:
+          PIPENV_VENV_IN_PROJECT: true
+    steps:
+      - checkout
+      - run:
+          name: Checks that the description will render correctly on PyPI.
+          command: |
+            pip install --upgrade pip
+            pip install twine --user
+            python setup.py sdist bdist_wheel
+            twine check dist/*
+  check-docstyle:
+    docker:
+      - image: *default-python
+        environment:
+          PIPENV_VENV_IN_PROJECT: true
+    steps:
+      - checkout
+      - run:
+          name: Checks compliance with Python docstring convention.
+          command: |
+            pip install pydocstyle --user
+            pydocstyle --count influxdb_client
+  check-examples:
+    docker:
+      - image: "cimg/python:3.8"
+        environment:
+          PIPENV_VENV_IN_PROJECT: true
+      - image: *default-influxdb
+        environment:
+          INFLUXD_HTTP_BIND_ADDRESS: :8086
+    steps:
+      - prepare
+      - run:
+          name: Checks that examples are runnable
+          command: |
+            pip install -e . --user
+            pip install -e .\[async\] --user
+            pip install -e .\[extra\] --user
+            pip install aiohttp-retry --user
+            export PYTHONPATH="$PWD"
+            cd examples
+            python ./monitoring_and_alerting.py
+            python ./buckets_management.py
+            python ./write_structured_data.py
+            python ./write_api_callbacks.py
+            python ./asynchronous.py
+            python ./asynchronous_management.py
+            python ./asynchronous_batching.py
+            python ./asynchronous_retry.py
+            python ./connection_check.py
+  check-sphinx:
+    docker:
+      - image: *default-python
+        environment:
+          PIPENV_VENV_IN_PROJECT: true
+    steps:
+      - checkout
+      - run:
+          name: Checks that sphinx docs are successfully generated
+          command: |
+            pip install -e . --user
+            pip install sphinx==1.8.5 --user
+            pip install sphinx_rtd_theme --user
+            pip install jinja2==3.0.3 --user
+            pip install myst_parser>=0.19.2--user
+            cd docs
+            python -m sphinx -T -E -b html -d _build/doctrees -D language=en . _build/html
+  check-aws-lambda-layer:
+    docker:
+      - image: "cimg/python:3.8"
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Create Archive to upload as a custom Lambda Layer
+          command: |
+            cd docker/aws_lambda_layer
+            docker build -t lambdalayer:latest .
+            docker create --name lambdalayer lambdalayer:latest
+            docker cp lambdalayer:/install/python.zip .
+
+workflows:
+  version: 2
+  build:
+    when:
+      not:
+        equal: [ scheduled_pipeline, << pipeline.trigger_source >> ]
+    jobs:
+      - check-code-style
+      - check-docstyle
+      - check-twine
+      - check-examples
+      - check-sphinx
+      - tests-python:
+          name: test-3.7
+      - tests-python:
+          name: test-3.7-without-ciso8601
+          enabled-ciso-8601: false
+      - tests-python:
+          name: test-3.7-influxdb-nightly
+          influxdb-image: "quay.io/influxdb/influxdb:nightly"
+      - tests-python:
+          name: test-3.8
+          python-image: "cimg/python:3.8"
+      - tests-python:
+          name: test-3.9
+          python-image: "cimg/python:3.9"
+      - tests-python:
+          name: test-3.10
+          python-image: "cimg/python:3.10"
+      - tests-python:
+          name: test-3.11
+          python-image: "cimg/python:3.11"
+      - tests-python:
+          name: test-3.12
+          python-image: "cimg/python:3.12"
+
+  nightly:
+    when:
+      equal: [ scheduled_pipeline, << pipeline.trigger_source >> ]
+    jobs:
+      - tests-python
+      - check-aws-lambda-layer

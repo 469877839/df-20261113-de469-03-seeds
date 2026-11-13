@@ -1,0 +1,16 @@
+certifi==2026.10.23
+httpretty==1.1.4
+iniconfig==2.3.1
+numpy==2.5.4
+packaging==26.3
+pandas==3.1.1
+pluggy==1.7.0
+psutil==7.2.2
+pygments==2.21.0
+pytest==8.4.2
+python-dateutil==4.0.0
+reactivex==6.1.0
+setuptools==84.2.1
+typing-extensions==4.16.0
+tzdata==2026.6
+urllib3==2.8.0
