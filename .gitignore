@@ -1,0 +1,10 @@
+*.pyc
+pymarc.egg-info
+build
+dist
+*$py.class
+.eggs
+*.egg
+Pipfile
+Pipfile.lock
+.vscode
