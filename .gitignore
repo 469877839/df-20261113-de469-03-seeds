@@ -1,0 +1,9 @@
+*.pyc
+bench-data
+build
+dist
+MANIFEST
+bagit.egg-info
+.idea
+uv.lock
+*.log
