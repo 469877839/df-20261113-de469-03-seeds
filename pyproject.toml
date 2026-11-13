@@ -1,0 +1,61 @@
+# https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
+
+[project]
+name = "sodapy"
+dynamic = ["version"]
+description = "Python client for the Socrata Open Data API (SODA)"
+keywords = ["soda", "socrata", "opendata", "api"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+    "Development Status :: 5 - Production/Stable",
+]
+authors = [{ name = "Cristina Muñoz", email = "hi@xmunoz.com" }]
+maintainers = [{ name = "Aidan Feldman", email = "aidan.feldman@gmail.com" }]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = [
+    # verified Python 3.9+ compatibility
+    "requests>=2.28.2",
+]
+
+[project.urls]
+repository = "https://github.com/afeld/sodapy.git"
+issues = "https://github.com/afeld/sodapy/issues"
+changelog = "https://github.com/afeld/sodapy/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest-cov",
+    "pytest-recording>=0.13.3",
+    "pytest>=7.1.2",
+    "requests-mock>=1.9.3",
+    "types-requests",
+    "vulture",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.setuptools]
+include-package-data = false
+packages = ["sodapy"]
+
+[tool.setuptools.dynamic]
+version = { attr = "sodapy.__version__" }
+
+[tool.vulture]
+ignore_names = [
+    "LOGGER",
+    "auth",
+    # https://github.com/jendrikseipp/vulture/issues/382
+    "pytest_runtest_setup",
+    "vcr_config",
+]
